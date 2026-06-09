@@ -1,0 +1,109 @@
+SSH Connectivity Test Case - Password and Key-Based Authentication
+
+Objective
+---------
+Verify that sshd on the device under test (DUT) correctly handles both
+password and public-key authentication, accepts valid credentials, and
+rejects invalid ones.
+
+
+Environment
+-----------
+DUT: any Ubuntu/Linux machine with openssh-server >= 8.0
+Client: Ubuntu 22.04+ on the same LAN, openssh-client installed
+
+For scripted runs, install paramiko:
+    pip install paramiko
+
+sshd_config on the DUT needs:
+    PasswordAuthentication yes
+    PubkeyAuthentication yes
+
+Test account to create on DUT:
+    sudo useradd -m -s /bin/bash ssh_test_user
+    echo "ssh_test_user:<PASSWORD>" | sudo chpasswd
+
+Generate test keys on the client and install them:
+    ssh-keygen -t rsa -b 4096 -f ~/.ssh/test_rsa -N ""
+    ssh-keygen -t ed25519 -f ~/.ssh/test_ed25519 -N ""
+    ssh-copy-id -i ~/.ssh/test_rsa.pub ssh_test_user@<DUT_IP>
+    ssh-copy-id -i ~/.ssh/test_ed25519.pub ssh_test_user@<DUT_IP>
+
+Confirm port 22 is reachable before starting:
+    nc -zv <DUT_IP> 22
+
+
+Test Scenarios
+--------------
+
+1. Password auth - valid credentials
+
+   Run:
+     ssh -o PubkeyAuthentication=no -o PasswordAuthentication=yes \
+         ssh_test_user@<DUT_IP> "echo AUTH_OK && id"
+
+   Pass: exit code 0, "AUTH_OK" in output, username visible in id output,
+         connection established in under 10 seconds.
+   Fail: "Permission denied" in stderr, or non-zero exit code.
+
+
+2. Password auth - wrong password
+
+   Run the same command but supply a wrong password.
+   Use -o NumberOfPasswordPrompts=1 to avoid retries.
+
+   Pass: exit code non-zero, "Permission denied" in stderr,
+         /var/log/auth.log shows "Failed password" for the attempt.
+   Fail: session opens despite wrong password.
+
+
+3. Key auth - RSA 4096
+
+   Run:
+     ssh -o PasswordAuthentication=no -i ~/.ssh/test_rsa \
+         ssh_test_user@<DUT_IP> "echo KEY_AUTH_OK && whoami"
+
+   Pass: exit code 0, "KEY_AUTH_OK" in output, no password prompt issued.
+   Fail: falls back to password prompt, or "Permission denied (publickey)".
+
+
+4. Key auth - Ed25519
+
+   Same as above but with -i ~/.ssh/test_ed25519.
+
+   Pass: exit code 0, expected string in output.
+   Fail: "unsupported key type" or permission denied in stderr.
+
+
+5. Key auth - unregistered key (negative test)
+
+   Generate a key that has NOT been added to authorized_keys:
+     ssh-keygen -t ed25519 -f /tmp/bad_key -N ""
+
+   Try to connect with it:
+     ssh -o PasswordAuthentication=no -i /tmp/bad_key \
+         ssh_test_user@<DUT_IP> "echo SHOULD_NOT_APPEAR"
+
+   Pass: exit code non-zero, "Permission denied (publickey)" in stderr.
+   Fail: session is established with an unregistered key.
+
+
+6. Exit code propagation
+
+   Verify the remote exit code is forwarded correctly for both auth methods:
+     ssh ... ssh_test_user@<DUT_IP> "exit 42"   # expect local $? == 42
+     ssh ... ssh_test_user@<DUT_IP> "exit 7"    # expect local $? == 7
+
+   Pass: local exit code matches what was passed to exit on the remote side.
+   Fail: always returns 0 or 1 regardless of remote exit code.
+
+
+Teardown
+--------
+    sudo deluser --remove-home ssh_test_user
+    rm -f ~/.ssh/test_rsa ~/.ssh/test_rsa.pub
+    rm -f ~/.ssh/test_ed25519 ~/.ssh/test_ed25519.pub
+    rm -f /tmp/bad_key /tmp/bad_key.pub
+
+Reload sshd if you modified sshd_config:
+    sudo systemctl reload sshd
