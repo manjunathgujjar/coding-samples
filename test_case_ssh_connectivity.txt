@@ -12,9 +12,6 @@ Environment
 DUT: any Ubuntu/Linux machine with openssh-server >= 8.0
 Client: Ubuntu 22.04+ on the same LAN, openssh-client installed
 
-For scripted runs, install paramiko:
-    pip install paramiko
-
 sshd_config on the DUT needs:
     PasswordAuthentication yes
     PubkeyAuthentication yes
@@ -42,9 +39,19 @@ Test Scenarios
      ssh -o PubkeyAuthentication=no -o PasswordAuthentication=yes \
          ssh_test_user@<DUT_IP> "echo AUTH_OK && id"
 
-   Pass: exit code 0, "AUTH_OK" in output, username visible in id output,
-         connection established in under 10 seconds.
+   Pass: exit code 0, "AUTH_OK" in output, username visible in id output.
+         Connection time under 10 seconds (measure with: time ssh ...).
    Fail: "Permission denied" in stderr, or non-zero exit code.
+
+   To automate this with paramiko:
+     import paramiko
+     client = paramiko.SSHClient()
+     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+     client.connect('<DUT_IP>', username='ssh_test_user', password='<PASSWORD>',
+                    allow_agent=False, look_for_keys=False)
+     _, stdout, _ = client.exec_command('echo AUTH_OK && id')
+     assert 'AUTH_OK' in stdout.read().decode()
+     client.close()
 
 
 2. Password auth - wrong password
@@ -96,6 +103,23 @@ Test Scenarios
 
    Pass: local exit code matches what was passed to exit on the remote side.
    Fail: always returns 0 or 1 regardless of remote exit code.
+
+
+7. MaxAuthTries lockout
+
+   Set MaxAuthTries 2 in sshd_config and reload sshd. Attempt to connect
+   with three consecutive wrong passwords (use a script or expect(1) to
+   supply them without interaction).
+
+   Pass: connection is dropped after the second failed attempt,
+         /var/log/auth.log shows "Disconnecting: Too many authentication
+         failures", subsequent connection attempts from the same client
+         are not permanently blocked (MaxAuthTries is per-connection, not
+         a ban).
+   Fail: server allows more attempts than MaxAuthTries permits, or bans
+         the client IP permanently.
+
+   Restore MaxAuthTries to its default after this scenario.
 
 
 Teardown

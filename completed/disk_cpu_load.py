@@ -32,28 +32,19 @@ def parse_args():
         description="Test CPU load imposed by a simple disk read operation."
     )
     parser.add_argument(
-        "--max-load",
-        type=int,
-        default=30,
-        metavar="LOAD",
+        "--max-load", type=int, default=30, metavar="LOAD",
         help="Maximum acceptable CPU load percentage (default: 30)",
     )
     parser.add_argument(
-        "--xfer",
-        type=int,
-        default=4096,
-        metavar="MEBIBYTES",
+        "--xfer", type=int, default=4096, metavar="MEBIBYTES",
         help="Amount of data to read in MiB (default: 4096)",
     )
     parser.add_argument(
-        "--verbose",
-        action="store_true",
+        "--verbose", action="store_true",
         help="Produce more verbose output",
     )
     parser.add_argument(
-        "device",
-        nargs="?",
-        default="/dev/sda",
+        "device", nargs="?", default="/dev/sda",
         help="Block device filename (default: /dev/sda)",
     )
     return parser.parse_args()
@@ -75,50 +66,42 @@ def validate_block_device(device):
 
 
 def read_cpu_stats():
-    """Return aggregate CPU time counters from /proc/stat as a list of ints."""
-    with open("/proc/stat", "r") as f:
+    with open("/proc/stat") as f:
         for line in f:
             if line.startswith("cpu "):
                 return [int(v) for v in line.split()[1:]]
-    raise RuntimeError("Could not find aggregate CPU line in /proc/stat")
+    raise RuntimeError("Could not read CPU stats from /proc/stat")
 
 
 def compute_cpu_load(start_stats, end_stats, verbose=False):
-    """
-    Compute CPU load as an integer percentage between two /proc/stat snapshots.
-
-    Index 3 in the stats array is the idle counter; everything else is active.
-    """
+    # field index 3 is idle time; subtract from total to get active CPU time
     diff_idle = end_stats[3] - start_stats[3]
-    start_total = sum(start_stats)
-    end_total = sum(end_stats)
-    diff_total = end_total - start_total
+    diff_total = sum(end_stats) - sum(start_stats)
     diff_used = diff_total - diff_idle
 
     if verbose:
-        print(f"Start CPU time    = {start_total}")
-        print(f"End CPU time      = {end_total}")
-        print(f"CPU time used     = {diff_used}")
-        print(f"Total elapsed     = {diff_total}")
+        print(f"Start CPU time = {sum(start_stats)}")
+        print(f"End CPU time = {sum(end_stats)}")
+        print(f"CPU time used = {diff_used}")
+        print(f"Total elapsed = {diff_total}")
 
     if diff_total == 0:
         return 0
     return (diff_used * 100) // diff_total
 
 
-def flush_disk_buffers(device):
-    subprocess.run(["blockdev", "--flushbufs", device], check=True)
-
-
 def read_disk(device, mebibytes, verbose=False):
     if verbose:
         print("Beginning disk read....")
-    subprocess.run(
-        ["dd", f"if={device}", "of=/dev/null", "bs=1048576", f"count={mebibytes}"],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    try:
+        subprocess.run(
+            ["dd", f"if={device}", "of=/dev/null", "bs=1048576", f"count={mebibytes}"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError:
+        sys.exit(f"Error reading from {device} -- device may be faulty or inaccessible")
     if verbose:
         print("Disk read complete!")
 
@@ -131,7 +114,15 @@ def main():
     print(f"Testing CPU load when reading {args.xfer} MiB from {device}")
     print(f"Maximum acceptable CPU load is {args.max_load}%")
 
-    flush_disk_buffers(device)
+    try:
+        subprocess.run(
+            ["blockdev", "--flushbufs", device],
+            check=True,
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"Failed to flush buffers for {device}: {e.stderr.decode().strip()}")
+
     start_stats = read_cpu_stats()
     read_disk(device, args.xfer, verbose=args.verbose)
     end_stats = read_cpu_stats()
