@@ -61,6 +61,8 @@ def validate_block_device(device):
         mode = os.stat(device).st_mode
     except FileNotFoundError:
         sys.exit(f"Unknown block device \"{device}\"")
+    except PermissionError:
+        sys.exit(f"Permission denied accessing \"{device}\" -- try running as root")
     if not stat_mod.S_ISBLK(mode):
         sys.exit(f"\"{device}\" is not a block device")
 
@@ -98,10 +100,10 @@ def read_disk(device, mebibytes, verbose=False):
             ["dd", f"if={device}", "of=/dev/null", "bs=1048576", f"count={mebibytes}"],
             check=True,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
-    except subprocess.CalledProcessError:
-        sys.exit(f"Error reading from {device} -- device may be faulty or inaccessible")
+    except subprocess.CalledProcessError as e:
+        sys.exit(f"Error reading from {device}: {e.stderr.decode().strip()}")
     if verbose:
         print("Disk read complete!")
 

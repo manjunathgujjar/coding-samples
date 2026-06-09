@@ -115,10 +115,10 @@ def generate_disk_activity(disk, errors):
             ["hdparm", "-t", f"/dev/{disk}"],
             check=True,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
-    except subprocess.CalledProcessError:
-        record_error(errors, f"hdparm failed on /dev/{disk}")
+    except subprocess.CalledProcessError as e:
+        record_error(errors, f"hdparm failed on /dev/{disk}: {e.stderr.decode().strip()}")
     except FileNotFoundError:
         record_error(errors, "hdparm not found -- install hdparm")
 

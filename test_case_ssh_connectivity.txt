@@ -7,6 +7,22 @@ password and public-key authentication, accepts valid credentials, and
 rejects invalid ones.
 
 
+Tools Used
+----------
+- openssh-client (ssh, ssh-keygen, ssh-copy-id) -- connection and key management
+- paramiko -- Python SSH library used to automate scenario 1
+- nc (netcat) -- TCP reachability pre-check
+- expect(1) -- interactive password automation for scenario 7
+- journalctl / /var/log/auth.log -- server-side audit log verification
+
+Non-standard library installation:
+  paramiko is not part of the Python standard library. Install it with:
+    pip install paramiko
+  Or in a virtualenv:
+    python3 -m venv venv && source venv/bin/activate && pip install paramiko
+  Tested with paramiko >= 2.11.
+
+
 Environment
 -----------
 DUT: any Ubuntu/Linux machine with openssh-server >= 8.0
@@ -43,7 +59,7 @@ Test Scenarios
          Connection time under 10 seconds (measure with: time ssh ...).
    Fail: "Permission denied" in stderr, or non-zero exit code.
 
-   To automate this with paramiko:
+   Automated equivalent using paramiko:
      import paramiko
      client = paramiko.SSHClient()
      client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -76,10 +92,13 @@ Test Scenarios
 
 4. Key auth - Ed25519
 
-   Same as above but with -i ~/.ssh/test_ed25519.
+   Run:
+     ssh -o PasswordAuthentication=no -i ~/.ssh/test_ed25519 \
+         ssh_test_user@<DUT_IP> "echo ED25519_OK"
 
-   Pass: exit code 0, expected string in output.
-   Fail: "unsupported key type" or permission denied in stderr.
+   Pass: exit code 0, "ED25519_OK" in stdout, no password prompt issued.
+   Fail: "unsupported key type" or "Permission denied" in stderr,
+         or exit code non-zero.
 
 
 5. Key auth - unregistered key (negative test)
@@ -107,17 +126,16 @@ Test Scenarios
 
 7. MaxAuthTries lockout
 
-   Set MaxAuthTries 2 in sshd_config and reload sshd. Attempt to connect
-   with three consecutive wrong passwords (use a script or expect(1) to
-   supply them without interaction).
+   Set MaxAuthTries 2 in sshd_config and reload sshd. Attempt three
+   consecutive wrong passwords using expect(1) to supply them without
+   interaction.
 
    Pass: connection is dropped after the second failed attempt,
          /var/log/auth.log shows "Disconnecting: Too many authentication
-         failures", subsequent connection attempts from the same client
-         are not permanently blocked (MaxAuthTries is per-connection, not
-         a ban).
-   Fail: server allows more attempts than MaxAuthTries permits, or bans
-         the client IP permanently.
+         failures". Note: MaxAuthTries is per-connection, not an IP-level
+         ban -- subsequent connections from the same client are not blocked.
+   Fail: server allows more attempts than MaxAuthTries permits, or
+         permanently bans the client IP.
 
    Restore MaxAuthTries to its default after this scenario.
 
